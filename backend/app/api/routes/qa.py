@@ -28,6 +28,7 @@ from app.services.performance_tracker import performance_tracker
 from app.services.traditional_rag_service import TraditionalRAGService
 from app.services.agentic_vector_rag_service import AgenticVectorRAGService
 from app.services.evaluation_service import evaluation_service
+from app.services.mcp_client import mcp_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -171,6 +172,16 @@ async def ask_question(
                     token_tracker=token_tracker,
                     tracking_id=tracking_id,
                     embedding_tracking_id=embedding_tracking_id,
+                    question_id=question_id
+                )
+            elif request.rag_method == "mcp":
+                # Process with MCP (Model Context Protocol)
+                logger.info("Processing with MCP...")
+                qa_result = await process_with_mcp(
+                    request=request,
+                    session_id=session_id,
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id,
                     question_id=question_id
                 )
             else:  # default to "agent"
@@ -1416,3 +1427,101 @@ async def process_with_agentic_vector_rag(
         performance_tracker.complete_reasoning_step(question_id, step_num)
     
     return result
+
+async def process_with_mcp(
+    request: QARequest,
+    session_id: str,
+    token_tracker: TokenUsageTracker,
+    tracking_id: str,
+    question_id: str
+) -> dict:
+    """Process question using MCP (Model Context Protocol)"""
+    try:
+        # Add reasoning step for MCP processing
+        step_num = performance_tracker.add_reasoning_step(
+            question_id,
+            "Processing question using MCP (Model Context Protocol)",
+            "mcp_query",
+            sources_consulted=["MCP Server"],
+            confidence=0.9,
+            output="Initiating MCP request"
+        )
+        
+        # Process question through MCP service
+        context = request.context or ""
+        result = await mcp_service.process_question_with_mcp(
+            question=request.question,
+            session_id=session_id,
+            verification_level=request.verification_level,
+            context=context
+        )
+        
+        # Complete the MCP processing step
+        mcp_success = result.get("metadata", {}).get("success", False)
+        sources_found = len(result.get("sources", []))
+        
+        performance_tracker.complete_reasoning_step(
+            question_id,
+            step_num,
+            f"MCP processing {'completed successfully' if mcp_success else 'failed'}: {sources_found} sources found",
+            confidence=result.get("confidence", 0.5)
+        )
+        
+        # Track token usage if available
+        if result.get("metadata", {}).get("tokens_used"):
+            await token_tracker.track_usage(
+                tracking_id,
+                service_type=ServiceType.MCP,
+                operation_type=OperationType.QA,
+                input_tokens=result["metadata"]["tokens_used"].get("input", 0),
+                output_tokens=result["metadata"]["tokens_used"].get("output", 0),
+                total_tokens=result["metadata"]["tokens_used"].get("total", 0),
+                cost=result["metadata"]["tokens_used"].get("cost", 0.0)
+            )
+        
+        # Add reasoning step for answer synthesis if we have results
+        if result.get("answer") and mcp_success:
+            step_num = performance_tracker.add_reasoning_step(
+                question_id,
+                "Synthesizing answer from MCP server response", 
+                "synthesize",
+                sources_consulted=[f"MCP source {i+1}" for i in range(sources_found)],
+                confidence=result.get("confidence", 0.8),
+                output="Answer synthesized from MCP server response"
+            )
+            performance_tracker.complete_reasoning_step(question_id, step_num)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in MCP processing: {e}")
+        # Add error step
+        step_num = performance_tracker.add_reasoning_step(
+            question_id,
+            f"MCP processing failed: {str(e)}",
+            "error",
+            sources_consulted=["MCP Server"],
+            confidence=0.0,
+            output=f"Error: {str(e)}"
+        )
+        performance_tracker.complete_reasoning_step(question_id, step_num)
+        
+        return {
+            "answer": f"Error processing question with MCP: {str(e)}",
+            "confidence": 0.0,
+            "sources": [],
+            "citations": [],
+            "sub_questions": [],
+            "verification_details": {
+                "overall_credibility_score": 0.0,
+                "verified_sources_count": 0,
+                "total_sources_count": 0,
+                "verification_summary": f"MCP processing failed: {str(e)}"
+            },
+            "metadata": {
+                "method": "MCP",
+                "session_id": session_id,
+                "error": str(e),
+                "success": False
+            }
+        }

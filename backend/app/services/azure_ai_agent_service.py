@@ -1479,6 +1479,28 @@ VERIFICATION LEVEL: COMPREHENSIVE
         logger.info(f"")        
         return all_results
 
+    async def create_thread(self, agent_id: str) -> str:
+        """Create a new conversation thread for an agent"""
+        try:
+            thread = self.client.agents.threads.create()
+            thread_id = thread.id
+            
+            # Initialize conversation tracking
+            self.conversations[thread_id] = AgentConversation(
+                agent_id=agent_id,
+                thread_id=thread_id,
+                messages=[],
+                status=AgentStatus.CREATED,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            
+            logger.info(f"Created thread: {thread_id} for agent: {agent_id}")
+            return thread_id
+            
+        except Exception as e:
+            logger.error(f"Error creating thread: {e}")
+            raise
 
 class MockAzureAIAgentService(AzureAIAgentService):
     """Mock implementation for testing and development"""
@@ -1736,3 +1758,4 @@ This analysis is based on the latest available financial data and market researc
             "agent_id": f"mock_verification_agent_{session_id}",
             "thread_id": f"mock_thread_{session_id}"
         }
+    

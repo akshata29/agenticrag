@@ -131,7 +131,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
   const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [agentServiceConnected, setAgentServiceConnected] = useState(false);
   const [credibilityCheckEnabled, setCredibilityCheckEnabled] = useState(false); // Off by default
-  const [ragMethod, setRagMethod] = useState<'agent' | 'traditional' | 'llamaindex' | 'agentic-vector'>('agent'); // Default to current implementation
+  const [ragMethod, setRagMethod] = useState<'agent' | 'traditional' | 'llamaindex' | 'agentic-vector' | 'mcp'>('agent'); // Default to current implementation
   const [evaluationEnabled, setEvaluationEnabled] = useState(false); // Off by default
   const [evaluatorType, setEvaluatorType] = useState<'foundry' | 'custom'>('custom'); // Default to custom
   const [evaluationModel, setEvaluationModel] = useState<string>('o3-mini'); // Default evaluation model
@@ -632,7 +632,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                   <Label htmlFor="rag-method" className="text-xs text-muted-foreground">
                     RAG Method:
                   </Label>
-                  <Select value={ragMethod} onValueChange={(value: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector') => setRagMethod(value)}>
+                  <Select value={ragMethod} onValueChange={(value: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector' | 'mcp') => setRagMethod(value)}>
                     <SelectTrigger className="w-32 h-7 text-xs">
                       <SelectValue />
                     </SelectTrigger>
@@ -641,6 +641,7 @@ export const QAContainer: React.FC<QAContainerProps> = ({ modelSettings }) => {
                       <SelectItem value="traditional">Traditional RAG</SelectItem>
                       <SelectItem value="llamaindex">LlamaIndex</SelectItem>
                       <SelectItem value="agentic-vector">Agentic Vector</SelectItem>
+                      <SelectItem value="mcp">MCP</SelectItem>
                     </SelectContent>
                   </Select>
                   

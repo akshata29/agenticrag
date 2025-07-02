@@ -4,8 +4,15 @@ from fastapi.responses import JSONResponse
 import os
 import time
 import logging
+import asyncio
+import platform
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+
+# Fix Windows event loop policy for aiodns compatibility
+# aiodns requires SelectorEventLoop on Windows
+if platform.system() == 'Windows':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Set up logging configuration
 logging.basicConfig(

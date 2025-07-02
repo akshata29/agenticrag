@@ -1,0 +1,77 @@
+{
+  "name": "financial-rag-mcp-vscode-example",
+  "displayName": "Financial RAG MCP Extension Example",
+  "description": "Example VS Code extension integration with Financial RAG MCP Server",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "financialRag.askQuestion",
+        "title": "Ask Financial Question",
+        "category": "Financial RAG"
+      },
+      {
+        "command": "financialRag.searchDocuments",
+        "title": "Search Financial Documents",
+        "category": "Financial RAG"
+      },
+      {
+        "command": "financialRag.streamingAnalysis",
+        "title": "Streaming Financial Analysis",
+        "category": "Financial RAG"
+      }
+    ],
+    "configuration": {
+      "title": "Financial RAG MCP",
+      "properties": {
+        "financialRag.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8001",
+          "description": "URL of the Financial RAG MCP server"
+        },
+        "financialRag.enableStreaming": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable streaming responses for better UX"
+        },
+        "financialRag.defaultVerificationLevel": {
+          "type": "string",
+          "enum": ["basic", "thorough", "comprehensive"],
+          "default": "thorough",
+          "description": "Default verification level for financial questions"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "16.x",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "ws": "^8.13.0",
+    "eventsource": "^2.0.2"
+  },
+  "extensionExample": {
+    "typescript": {
+      "extension.ts": "// Example VS Code extension code\nimport * as vscode from 'vscode';\n\nclass FinancialRAGMCPClient {\n  private serverUrl: string;\n  \n  constructor() {\n    const config = vscode.workspace.getConfiguration('financialRag');\n    this.serverUrl = config.get('serverUrl', 'http://127.0.0.1:8000');\n  }\n  \n  async askFinancialQuestion(question: string): Promise<any> {\n    const response = await fetch(`${this.serverUrl}/mcp/rpc`, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        jsonrpc: '2.0',\n        id: Date.now().toString(),\n        method: 'answer_financial_question',\n        params: {\n          question,\n          verification_level: vscode.workspace.getConfiguration('financialRag').get('defaultVerificationLevel')\n        }\n      })\n    });\n    \n    return response.json();\n  }\n  \n  async streamingAnalysis(question: string, onProgress: (data: any) => void): Promise<void> {\n    const response = await fetch(`${this.serverUrl}/mcp/stream`, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        jsonrpc: '2.0',\n        id: Date.now().toString(),\n        method: 'answer_financial_question',\n        params: { question, use_multi_agent: true }\n      })\n    });\n    \n    const reader = response.body?.getReader();\n    if (!reader) return;\n    \n    while (true) {\n      const { done, value } = await reader.read();\n      if (done) break;\n      \n      const text = new TextDecoder().decode(value);\n      const lines = text.split('\\n');\n      \n      for (const line of lines) {\n        if (line.startsWith('data: ')) {\n          try {\n            const data = JSON.parse(line.slice(6));\n            onProgress(data);\n          } catch (e) {\n            // Ignore parse errors\n          }\n        }\n      }\n    }\n  }\n}\n\nexport function activate(context: vscode.ExtensionContext) {\n  const client = new FinancialRAGMCPClient();\n  \n  // Register ask question command\n  const askQuestionCommand = vscode.commands.registerCommand('financialRag.askQuestion', async () => {\n    const question = await vscode.window.showInputBox({\n      prompt: 'Enter your financial question',\n      placeHolder: 'e.g., What are Apple\\'s main revenue streams?'\n    });\n    \n    if (!question) return;\n    \n    const progressOptions = {\n      location: vscode.ProgressLocation.Notification,\n      title: 'Analyzing financial question...',\n      cancellable: false\n    };\n    \n    vscode.window.withProgress(progressOptions, async (progress) => {\n      try {\n        const result = await client.askFinancialQuestion(question);\n        \n        // Show result in a new editor\n        const doc = await vscode.workspace.openTextDocument({\n          content: `# Financial Analysis Result\\n\\n**Question:** ${question}\\n\\n**Answer:**\\n${result.result?.answer || 'No answer provided'}\\n\\n**Confidence:** ${result.result?.confidence || 0}\\n\\n**Sources:** ${result.result?.sources?.length || 0} documents`,\n          language: 'markdown'\n        });\n        \n        await vscode.window.showTextDocument(doc);\n        \n      } catch (error) {\n        vscode.window.showErrorMessage(`Financial analysis failed: ${error}`);\n      }\n    });\n  });\n  \n  // Register streaming analysis command\n  const streamingCommand = vscode.commands.registerCommand('financialRag.streamingAnalysis', async () => {\n    const question = await vscode.window.showInputBox({\n      prompt: 'Enter your financial question for streaming analysis',\n      placeHolder: 'e.g., Analyze Microsoft\\'s competitive position'\n    });\n    \n    if (!question) return;\n    \n    // Create output channel for streaming results\n    const outputChannel = vscode.window.createOutputChannel('Financial RAG Analysis');\n    outputChannel.show();\n    outputChannel.appendLine(`Starting analysis for: ${question}\\n`);\n    \n    try {\n      await client.streamingAnalysis(question, (data) => {\n        if (data.type === 'progress') {\n          outputChannel.appendLine(`[${data.step}] ${data.message}`);\n        } else if (data.type === 'result') {\n          outputChannel.appendLine('\\n=== FINAL RESULT ===');\n          outputChannel.appendLine(data.data?.answer || 'No answer provided');\n          outputChannel.appendLine(`\\nConfidence: ${data.data?.confidence || 0}`);\n          outputChannel.appendLine(`Sources: ${data.data?.sources?.length || 0}`);\n        }\n      });\n    } catch (error) {\n      outputChannel.appendLine(`\\nError: ${error}`);\n    }\n  });\n  \n  context.subscriptions.push(askQuestionCommand, streamingCommand);\n}\n\nexport function deactivate() {}"
+    },
+    "usage_instructions": [
+      "1. Install the extension in VS Code",
+      "2. Start the Financial RAG MCP server in HTTP mode: python mcp_server/launcher.py --http",
+      "3. Open Command Palette (Ctrl+Shift+P)",
+      "4. Run 'Financial RAG: Ask Financial Question' or 'Financial RAG: Streaming Financial Analysis'",
+      "5. Enter your financial question and view the results"
+    ]
+  }
+}

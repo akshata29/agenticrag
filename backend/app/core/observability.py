@@ -201,23 +201,30 @@ class ObservabilityManager:
         
     def track_request(self, endpoint: str, user_id: str = None, session_id: str = None):
         """Track API request with enhanced metadata"""
-        if not self.telemetry_enabled or not self.request_counter:
+        if not self.telemetry_enabled:
             return
             
-        attributes = {"endpoint": endpoint}
-        if user_id:
-            attributes["user_id"] = user_id
-        if session_id:
-            attributes["session_id"] = session_id
-            
-        self.request_counter.add(1, attributes)
+        try:
+            if self.request_counter is not None:
+                attributes = {"endpoint": endpoint}
+                if user_id:
+                    attributes["user_id"] = user_id
+                if session_id:
+                    attributes["session_id"] = session_id
+                    
+                self.request_counter.add(1, attributes)
+        except Exception as e:
+            logging.warning(f"Failed to track request metrics: {e}")
         
-        self.metrics_storage["requests"].append({
-            "timestamp": datetime.utcnow(),
-            "endpoint": endpoint,
-            "user_id": user_id,
-            "session_id": session_id
-        })
+        try:
+            self.metrics_storage["requests"].append({
+                "timestamp": datetime.utcnow(),
+                "endpoint": endpoint,
+                "user_id": user_id,
+                "session_id": session_id
+            })
+        except Exception as e:
+            logging.warning(f"Failed to store request metrics: {e}")
         
     def track_tokens(self, model: str, prompt_tokens: int, completion_tokens: int, 
                     session_id: str = None, cost: float = None):

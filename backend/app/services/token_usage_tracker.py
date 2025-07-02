@@ -30,6 +30,7 @@ class ServiceType(str, Enum):
     QUESTION_DECOMPOSITION = "question_decomposition"
     RELEVANCE_EXPLANATION = "relevance_explanation"
     AGENT_SERVICE = "azure_ai_agent_service"
+    MCP = "mcp"
 
 class OperationType(str, Enum):
     """Operation types for detailed tracking"""
@@ -43,6 +44,8 @@ class OperationType(str, Enum):
     EMBEDDING_GENERATION = "embedding_generation"
     QUESTION_DECOMPOSITION = "question_decomposition"
     SOURCE_VERIFICATION = "source_verification"
+    QA = "qa"
+    MCP_TOOL_CALL = "mcp_tool_call"
 
 @dataclass
 class TokenUsageRecord:

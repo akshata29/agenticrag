@@ -32,6 +32,13 @@ This repo implements a complete RAG Financial POC with three interconnected use 
 - **A2A (Agent-to-Agent)**: Inter-agent collaboration for complex financial analysis
 - **Financial Document Specialists**: Dedicated agents for 10-K/10-Q report analysis
 
+### 🌐 Model Context Protocol (MCP) Integration
+- **Multiple Protocols**: Support for stdin/stdout, HTTP JSON-RPC, WebSocket, and Server-Sent Events
+- **Claude Compatibility**: Native integration with Claude Desktop and other MCP clients
+- **Streaming Support**: Real-time progress updates for long-running financial analysis
+- **Tool Discovery**: Automatic tool and resource discovery for external AI assistants
+- **External Client Support**: Easy integration with VS Code extensions, web apps, and custom clients
+
 ### 🔍 Hybrid Search & RAG Pipeline
 - **Vector Search**: Semantic similarity using Azure AI Search
 - **Keyword Search**: Traditional text matching for precise queries
@@ -165,6 +172,50 @@ The FastAPI backend provides comprehensive API documentation:
 - **Custom Spans**: Financial document processing workflows
 - **Performance Profiling**: Bottleneck identification and optimization
 
+## Model Context Protocol (MCP) Server
+
+The system includes a comprehensive MCP server that can be used by Claude, VS Code extensions, and other MCP-compatible clients.
+
+### 🚀 MCP Server Features
+
+- **Multiple Protocols**: Support for stdin/stdout, HTTP, WebSocket, and SSE
+- **Streaming Responses**: Real-time progress updates for long-running operations
+- **Tool Discovery**: Automatic discovery of available financial analysis tools
+- **Claude Desktop Integration**: Native support for Claude Desktop app
+- **External Client Support**: REST API for web applications and services
+
+### Quick MCP Setup
+
+#### For Claude Desktop
+```json
+{
+  "mcpServers": {
+    "financial-rag": {
+      "command": "python",
+      "args": ["path/to/agenticrag/mcp_server/main.py"],
+      "env": {
+        "PYTHONPATH": "path/to/agenticrag"
+      }
+    }
+  }
+}
+```
+
+#### For HTTP Clients (Web Apps, VS Code)
+```bash
+cd mcp_server
+python streaming_mcp_server.py --mode http --port 8000
+```
+
+### Available MCP Tools
+
+1. **answer_financial_question** - Comprehensive Q&A with RAG (streaming supported)
+2. **search_financial_documents** - Knowledge base search (streaming supported)
+3. **verify_source_credibility** - Source reliability assessment
+4. **coordinate_multi_agent_analysis** - Multi-agent coordination (streaming supported)
+5. **get_knowledge_base_stats** - System health and statistics
+
+See [mcp_server/README.md](./mcp_server/README.md) for complete documentation.
 
 ## Support & Documentation
 

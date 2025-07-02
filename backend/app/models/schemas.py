@@ -156,7 +156,7 @@ class QARequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context for the question")
     max_tokens: int = Field(default=4000, ge=1, le=8000)
     credibility_check_enabled: bool = Field(default=False, description="Whether to perform credibility checks on sources")
-    rag_method: str = Field(default="agent", description="RAG method to use: agent, traditional, llamaindex, agentic-vector")
+    rag_method: str = Field(default="agent", description="RAG method to use: agent, traditional, llamaindex, agentic-vector, mcp")
     evaluation_enabled: bool = Field(default=False, description="Whether to perform evaluation of the answer")
     evaluator_type: EvaluatorType = Field(default=EvaluatorType.CUSTOM, description="Type of evaluator to use")
     evaluation_model: Optional[str] = Field(default="o3-mini", description="Model to use for evaluation")

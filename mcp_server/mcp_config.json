@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "financial-rag": {
+      "command": "python",
+      "args": [
+        "d:/repos/agenticrag/mcp_server/main.py"
+      ],
+      "env": {
+        "PYTHONPATH": "d:/repos/agenticrag"
+      }
+    }
+  }
+}

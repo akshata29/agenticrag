@@ -91,6 +91,7 @@ export const AnswerDisplay: React.FC<AnswerDisplayProps> = ({
                  answer.metadata.rag_method === 'agent' ? 'Agent' :
                  answer.metadata.rag_method === 'llamaindex' ? 'LlamaIndex' :
                  answer.metadata.rag_method === 'agentic-vector' ? 'Agentic Vector' :
+                 answer.metadata.rag_method === 'mcp' ? 'MCP' :
                  answer.metadata.rag_method}
               </Badge>
             )}

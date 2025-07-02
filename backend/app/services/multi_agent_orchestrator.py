@@ -12,7 +12,7 @@ from semantic_kernel.contents import ChatHistory
 from app.services.azure_services import AzureServiceManager
 from app.services.knowledge_base_manager import AdaptiveKnowledgeBaseManager
 from app.services.document_processor import DocumentProcessor
-from app.services.azure_ai_agent_service import AzureAIAgentService, MockAzureAIAgentService
+from app.services.azure_ai_agent_service import AzureAIAgentService
 from app.core.config import settings
 from app.core.observability import observability
 
@@ -142,7 +142,7 @@ class ContentGeneratorAgent(FinancialAgent):
         )
         
         knowledge_context = "\n\n".join([
-            f"Source: {chunk['metadata'].get('source', 'Unknown')}\n{chunk['content']}"
+            f"Source: {chunk.get('source', 'Unknown')}\n{chunk.get('content', '')}"
             for chunk in relevant_chunks
         ])
         
@@ -174,9 +174,9 @@ class ContentGeneratorAgent(FinancialAgent):
         
         citations = [
             {
-                "source": chunk['metadata'].get('source', 'Unknown'),
-                "document_type": chunk['metadata'].get('document_type', 'Unknown'),
-                "section": chunk['metadata'].get('section_title', 'Unknown'),
+                "source": chunk.get('source', 'Unknown'),
+                "document_type": chunk.get('document_type', 'Unknown'),
+                "section": chunk.get('section_type', 'Unknown'),
                 "confidence": chunk.get('score', 0.0)
             }
             for chunk in relevant_chunks
@@ -212,7 +212,7 @@ class ContentGeneratorAgent(FinancialAgent):
         {content}
         
         Available Sources:
-        {chr(10).join([f"[{i+1}] {chunk['metadata'].get('source', 'Unknown')} - {chunk['metadata'].get('document_type', 'Unknown')}" for i, chunk in enumerate(relevant_chunks)])}
+        {chr(10).join([f"[{i+1}] {chunk.get('source', 'Unknown')} - {chunk.get('document_type', 'Unknown')}" for i, chunk in enumerate(relevant_chunks)])}
         
         Add inline citations where appropriate and create a reference list at the end.
         """
@@ -228,8 +228,8 @@ class ContentGeneratorAgent(FinancialAgent):
         citations = [
             {
                 "id": i+1,
-                "source": chunk['metadata'].get('source', 'Unknown'),
-                "document_type": chunk['metadata'].get('document_type', 'Unknown'),
+                "source": chunk.get('source', 'Unknown'),
+                "document_type": chunk.get('document_type', 'Unknown'),
                 "style": citation_style
             }
             for i, chunk in enumerate(relevant_chunks)
@@ -264,18 +264,17 @@ class QAAgent(FinancialAgent):
     def _initialize_azure_ai_agent_service(self, azure_manager: AzureServiceManager) -> AzureAIAgentService:
         """Initialize Azure AI Agent Service for MCP client functionality"""
         try:
-            # Try to get project client from azure_manager
-            if hasattr(azure_manager, 'get_project_client'):
-                project_client = azure_manager.get_project_client()
-                if project_client:
-                    return AzureAIAgentService(project_client)
+            # Use the correct initialization pattern with project client
+            project_client = azure_manager.get_project_client()
+            if not project_client:
+                logger.error("Failed to get project client from Azure service manager")
+                raise Exception("Azure AI Project client not available")
             
-            logger.warning("Using mock Azure AI Agent Service - project client not available")
-            return MockAzureAIAgentService()
+            return AzureAIAgentService(project_client)
             
         except Exception as e:
             logger.error(f"Error initializing Azure AI Agent Service: {e}")
-            return MockAzureAIAgentService()
+            raise Exception(f"Failed to initialize Azure AI Agent Service: {e}")
     
     async def _ensure_qa_agent_initialized(self):
         """Ensure QA agent is created and ready"""
@@ -364,6 +363,7 @@ class QAAgent(FinancialAgent):
         """Answer financial questions with source verification using Azure AI Agent Service"""
         question = request["question"]
         verification_level = request.get("verification_level", "thorough")
+        search_results = request.get("search_results", [])  # Check for pre-provided search results
         
         # Extract token tracking context if available
         token_tracker = context.get('token_tracker')
@@ -376,82 +376,132 @@ class QAAgent(FinancialAgent):
                 
                 await self._ensure_qa_agent_initialized()
                 
-                sub_questions = await self._decompose_question_internal(question)
-                  # Search knowledge base for relevant information
-                all_chunks = []
-                for sub_q in sub_questions:
-                    chunks = await self.kb_manager.search_knowledge_base(
-                        query=sub_q,
-                        top_k=5,
-                        filters={"document_type": ["10-K", "10-Q", "8-K"]},
-                        token_tracker=token_tracker,
-                        tracking_id=tracking_id
-                    )
-                    all_chunks.extend(chunks)
+                # Use pre-provided search results if available, otherwise search
+                if search_results:
+                    logger.info(f"🔍 Using pre-provided search results: {len(search_results)} results")
+                    sorted_chunks = search_results[:10]  # Use the first 10 results
+                else:
+                    logger.info("🔍 No pre-provided search results, performing own search")
+                    sub_questions = await self._decompose_question_internal(question)
+                      # Search knowledge base for relevant information
+                    all_chunks = []
+                    for sub_q in sub_questions:
+                        chunks = await self.kb_manager.search_knowledge_base(
+                            query=sub_q,
+                            top_k=5,
+                            filters={"document_type": ["10-K", "10-Q", "8-K"]},
+                            token_tracker=token_tracker,
+                            tracking_id=tracking_id
+                        )
+                        all_chunks.extend(chunks)
+                    
+                    unique_chunks = {chunk['chunk_id']: chunk for chunk in all_chunks}.values()
+                    sorted_chunks = sorted(unique_chunks, key=lambda x: x.get('score', 0), reverse=True)[:10]
                 
-                unique_chunks = {chunk['chunk_id']: chunk for chunk in all_chunks}.values()
-                sorted_chunks = sorted(unique_chunks, key=lambda x: x.get('score', 0), reverse=True)[:10]
+                logger.info(f"📚 Using {len(sorted_chunks)} chunks for context")
                 
                 verification_details = await self._verify_sources_internal(sorted_chunks)
                 
                 knowledge_context = "\n\n".join([
-                    f"Source: {chunk['metadata'].get('source', 'Unknown')} (Credibility: {verification_details.get(chunk['chunk_id'], {}).get('score', 0.5):.2f})\n{chunk['content']}"
+                    f"Source: {chunk.get('source', 'Unknown')} (Credibility: {verification_details.get(chunk.get('chunk_id', 'unknown'), {}).get('score', 0.5):.2f})\n{chunk.get('content', '')}"
                     for chunk in sorted_chunks
                 ])
                 
-                # Use Azure AI Agent Service to generate comprehensive answer
-                agent_context = {
-                    "knowledge_context": knowledge_context,
-                    "sub_questions": sub_questions,
-                    "verification_level": verification_level,
-                    "document_types": list(set([chunk['metadata'].get('document_type', 'Unknown') for chunk in sorted_chunks]))
-                }
+                logger.info(f"📝 Knowledge context length: {len(knowledge_context)}")
+                logger.info(f"📄 First chunk preview: {sorted_chunks[0]['content'][:200] if sorted_chunks else 'No chunks'}...")
                 
-                # Run agent conversation to get comprehensive answer
-                agent_result = await self.azure_ai_agent_service.run_agent_conversation(
-                    agent_id=self.qa_agent_id,
-                    thread_id=self.current_thread_id,
-                    message=question,
-                    context=agent_context
-                )
+                # Enhanced financial analysis prompt with search results context
+                financial_prompt = f"""
+                You are a financial analyst expert. Answer this question using the provided financial documents:
                 
-                answer = agent_result.response
+                Question: {question}
+                
+                Financial Documents Context:
+                {knowledge_context}
+                
+                Please provide a comprehensive answer that:
+                1. Directly addresses the question
+                2. Uses specific data and quotes from the documents
+                3. Cites the sources properly
+                4. Provides confidence in your analysis
+                
+                Format your response as a detailed financial analysis.
+                """
+                
+                logger.info(f"📤 Sending enhanced prompt to agent (length: {len(financial_prompt)})")
+                
+                try:
+                    # Get response from Azure AI Agent Service
+                    logger.info("🔄 Calling azure_ai_agent_service.run_agent_conversation...")
+                    agent_result = await self.azure_ai_agent_service.run_agent_conversation(
+                        agent_id=self.qa_agent_id,
+                        thread_id=self.current_thread_id,
+                        message=financial_prompt,
+                        context={
+                            "task": "financial_question_answering",
+                            "search_results": sorted_chunks,
+                            "verification_level": verification_level
+                        }
+                    )
+                    logger.info("✅ Agent conversation completed successfully")
+                    
+                except Exception as agent_error:
+                    logger.error(f"❌ Agent conversation failed: {agent_error}", exc_info=True)
+                    answer_text = f"Agent processing error: {str(agent_error)}"
+                    agent_result = type('obj', (object,), {'response': answer_text, 'sources': []})()
+                
+                logger.info(f"📥 Agent response type: {type(agent_result)}")
+                logger.info(f"📥 Agent response attributes: {dir(agent_result) if hasattr(agent_result, '__dict__') else 'Not an object'}")
+                
+                if hasattr(agent_result, 'response'):
+                    answer_text = agent_result.response
+                    logger.info(f"📝 Agent answer length: {len(answer_text)}")
+                    logger.info(f"📝 Agent answer preview: {answer_text[:300]}...")
+                else:
+                    logger.error(f"❌ Agent result missing 'response' attribute: {agent_result}")
+                    answer_text = "Error: No response from agent"
+                
                 confidence = self._calculate_answer_confidence(sorted_chunks, verification_details)
                 
                 combined_sources = []
                 for chunk in sorted_chunks:
+                    credibility_score = verification_details.get(chunk.get('chunk_id', 'unknown'), {}).get('score', 0.5)
                     combined_sources.append({
-                        "source": chunk['metadata'].get('source', 'Unknown'),
-                        "document_type": chunk['metadata'].get('document_type', 'Unknown'),
-                        "section": chunk['metadata'].get('section_title', 'Unknown'),
-                        "relevance_score": chunk.get('score', 0.0),
-                        "credibility_score": verification_details.get(chunk['chunk_id'], {}).get('score', 0.5)
+                        "content": chunk.get('content', ''),
+                        "source": chunk.get('source', 'Unknown'),
+                        "document_type": chunk.get('document_type', 'Unknown'),
+                        "document_id": chunk.get('document_id', chunk.get('chunk_id', 'unknown')),
+                        "document_title": chunk.get('title', chunk.get('source', 'Unknown Document')),
+                        "section": chunk.get('section_type', 'Unknown'),
+                        "section_title": chunk.get('section_type', 'Unknown'),
+                        "page_number": chunk.get('page_number'),
+                        "url": chunk.get('document_url'),
+                        "relevance_score": chunk.get('search_score', 0.0),
+                        "credibility_score": credibility_score,
+                        "confidence": "high" if credibility_score > 0.8 else "medium" if credibility_score > 0.5 else "low"
                     })
                 
-                for agent_source in agent_result.sources:
-                    combined_sources.append({
-                        "source": agent_source.get("file_id", "Azure AI Agent"),
-                        "document_type": "Agent Citation",
-                        "section": agent_source.get("quote", "")[:100],
-                        "relevance_score": 1.0,
-                        "credibility_score": 0.9
-                    })
+                if hasattr(agent_result, 'sources') and agent_result.sources:
+                    for agent_source in agent_result.sources:
+                        combined_sources.append({
+                            "source": agent_source.get("file_id", "Azure AI Agent"),
+                            "document_type": "Agent Citation",
+                            "section": agent_source.get("quote", "")[:100],
+                            "relevance_score": 1.0,
+                            "credibility_score": 0.9
+                        })
                 
-            # span.set_attribute("answer_length", len(answer))
-            # span.set_attribute("sources_count", len(combined_sources))
-            # span.set_attribute("confidence", confidence)
-            # span.set_attribute("success", True)
+                logger.info(f"✅ Final result - Answer: {len(answer_text)} chars, Sources: {len(combined_sources)}, Confidence: {confidence}")
                 
                 return {
-                    "answer": answer,
+                    "answer": answer_text,
                     "sources": combined_sources,
                     "confidence": confidence,
                     "verification_details": verification_details,
-                    "sub_questions_addressed": sub_questions,
                     "agent_metadata": {
                         "agent_id": self.qa_agent_id,
                         "thread_id": self.current_thread_id,
-                        "run_id": agent_result.run_id
+                        "run_id": getattr(agent_result, 'run_id', 'unknown')
                     },
                     "success": True
                 }
@@ -716,12 +766,11 @@ class QAAgent(FinancialAgent):
         
         for chunk in chunks:
             chunk_id = chunk.get('chunk_id', 'unknown')
-            metadata = chunk.get('metadata', {})
             
             score = 0.5  # Base score
             factors = []
             
-            doc_type = metadata.get('document_type', 'unknown')
+            doc_type = chunk.get('document_type', 'unknown')
             if doc_type in ['10-K', '10-Q']:
                 score += 0.3
                 factors.append("SEC filing")
@@ -729,11 +778,11 @@ class QAAgent(FinancialAgent):
                 score += 0.2
                 factors.append("Current report")
             
-            if metadata.get('company_name'):
+            if chunk.get('company'):
                 score += 0.1
                 factors.append("Identified company")
             
-            filing_date = metadata.get('filing_date')
+            filing_date = chunk.get('filing_date')
             if filing_date:
                 score += 0.1
                 factors.append("Recent filing")
@@ -744,7 +793,7 @@ class QAAgent(FinancialAgent):
                 "score": score,
                 "factors": factors,
                 "document_type": doc_type,
-                "source": metadata.get('source', 'Unknown')
+                "source": chunk.get('source', 'Unknown')
             }
         
         return verification_details
@@ -780,18 +829,17 @@ class KnowledgeManagerAgent(FinancialAgent):
     def _initialize_azure_ai_agent_service(self, azure_manager: AzureServiceManager) -> AzureAIAgentService:
         """Initialize Azure AI Agent Service for MCP client functionality"""
         try:
-            # Try to get project client from azure_manager
-            if hasattr(azure_manager, 'get_project_client'):
-                project_client = azure_manager.get_project_client()
-                if project_client:
-                    return AzureAIAgentService(project_client)
+            # Use the correct initialization pattern with project client
+            project_client = azure_manager.get_project_client()
+            if not project_client:
+                logger.error("Failed to get project client from Azure service manager")
+                raise Exception("Azure AI Project client not available")
             
-            logger.warning("Using mock Azure AI Agent Service - project client not available")
-            return MockAzureAIAgentService()
+            return AzureAIAgentService(project_client)
             
         except Exception as e:
             logger.error(f"Error initializing Azure AI Agent Service: {e}")
-            return MockAzureAIAgentService()
+            raise Exception(f"Failed to initialize Azure AI Agent Service: {e}")
     
     async def _ensure_kb_agent_initialized(self):
         """Ensure Knowledge Base agent is created and ready"""
@@ -988,8 +1036,10 @@ class MultiAgentOrchestrator:
             
             self._update_session_context(session_id, request, result)
             
-            observability.track_agent_interaction(
-                agent_type.value, request.get("capability"), result.get("success", False)
+            # Track the agent interaction using existing observability method
+            observability.track_request(
+                endpoint=f"agent_{agent_type.value}_{request.get('capability', 'unknown')}",
+                session_id=session_id
             )
             
             return result

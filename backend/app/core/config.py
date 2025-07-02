@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     api_port: int = int(os.getenv("API_PORT", "8000"))
     allowed_origins: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
     
+    # MCP (Model Context Protocol) Configuration
+    MCP_SERVER_URL: Optional[str] = os.getenv("MCP_SERVER_URL", None)
+    MCP_SERVER_TIMEOUT: int = int(os.getenv("MCP_SERVER_TIMEOUT", "30"))
+    
     # Additional constants (not environment-configurable)
     MAX_TOKENS_PER_REQUEST: int = 4000
     TEMPERATURE: float = 0.1
@@ -139,5 +143,6 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        extra = "allow"  # Allow extra fields to prevent validation errors
 
 settings = Settings()

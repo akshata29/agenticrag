@@ -240,7 +240,7 @@ class ApiService {
     embedding_model?: string;
     temperature?: number;
     credibility_check_enabled?: boolean;
-    rag_method?: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector';
+    rag_method?: 'agent' | 'traditional' | 'llamaindex' | 'agentic-vector' | 'mcp';
     evaluation_enabled?: boolean;
     evaluator_type?: 'foundry' | 'custom';
     evaluation_model?: string;

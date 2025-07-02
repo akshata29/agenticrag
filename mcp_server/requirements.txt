@@ -1,0 +1,26 @@
+# MCP Server Requirements
+# These are the dependencies needed for the standalone MCP server
+
+# Core dependencies (should match backend requirements)
+fastapi>=0.104.1
+pydantic>=2.5.0
+azure-cosmos>=4.5.1
+azure-storage-blob>=12.19.0
+azure-search-documents>=11.4.0
+azure-ai-openai>=1.1.0
+azure-identity>=1.15.0
+openai>=1.7.0
+
+# HTTP and WebSocket server support
+uvicorn>=0.24.0
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Streaming support
+sse-starlette>=1.6.5
+
+# Async support
+asyncio-mqtt>=0.13.0
+
+# Logging and utilities
+python-dotenv>=1.0.0
