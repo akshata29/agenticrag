@@ -809,10 +809,41 @@ class QAAgent(FinancialAgent):
             for chunk in chunks
         ]
         
-        avg_relevance = sum(relevance_scores) / len(relevance_scores)
-        avg_credibility = sum(credibility_scores) / len(credibility_scores)
+        # Normalize relevance scores since Azure Cognitive Search scores are typically very low (0.01-0.1)
+        # but still meaningful for ranking. Convert to a more meaningful 0-1 scale.
+        if relevance_scores:
+            max_relevance = max(relevance_scores)
+            if max_relevance > 0:
+                # Normalize and boost relevance scores for better confidence calculation
+                normalized_relevance_scores = []
+                for score in relevance_scores:
+                    # Apply a scaling function that maps typical search scores (0.01-0.1) to meaningful confidence (0.3-0.9)
+                    if score >= 0.05:  # High relevance
+                        normalized_score = 0.8 + (score - 0.05) * 2  # Maps 0.05+ to 0.8-0.9+
+                    elif score >= 0.02:  # Medium relevance  
+                        normalized_score = 0.6 + (score - 0.02) * 6.67  # Maps 0.02-0.05 to 0.6-0.8
+                    elif score >= 0.01:  # Low but acceptable relevance
+                        normalized_score = 0.4 + (score - 0.01) * 20  # Maps 0.01-0.02 to 0.4-0.6
+                    else:  # Very low relevance
+                        normalized_score = score * 40  # Maps 0-0.01 to 0-0.4
+                    
+                    normalized_relevance_scores.append(min(1.0, normalized_score))
+                
+                avg_relevance = sum(normalized_relevance_scores) / len(normalized_relevance_scores)
+            else:
+                avg_relevance = 0.0
+        else:
+            avg_relevance = 0.0
+            
+        avg_credibility = sum(credibility_scores) / len(credibility_scores) if credibility_scores else 0.5
         
-        confidence = (avg_relevance * 0.6) + (avg_credibility * 0.4)
+        # Calculate final confidence with weighted average
+        confidence = (avg_relevance * 0.7) + (avg_credibility * 0.3)  # Weight relevance higher
+        
+        # Ensure minimum confidence if we have good quality sources
+        if len(chunks) >= 3 and avg_credibility >= 0.6:
+            confidence = max(confidence, 0.6)  # Boost confidence for multiple good sources
+        
         return min(1.0, max(0.0, confidence))
 
 class KnowledgeManagerAgent(FinancialAgent):

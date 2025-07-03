@@ -101,3 +101,5 @@ Thumbs.db
 
 backend/.env
 frontend/.env
+.env.backend
+.env.mcp

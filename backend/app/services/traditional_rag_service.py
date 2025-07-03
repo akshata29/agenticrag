@@ -69,14 +69,42 @@ class TraditionalRAGService:
             if not self.openai_client:
                 await self.initialize()
             
-            # Step 1: Search the knowledge base
-            logger.info(f"🔍 Traditional RAG: Step 1 - Searching knowledge base for: '{question[:100]}...'")
-            search_results = await self._search_knowledge_base(
-                question, 
-                top_k=10 if verification_level == VerificationLevel.BASIC else 15,
-                token_tracker=token_tracker,
-                tracking_id=tracking_id
-            )
+            # Step 1: Intelligent query analysis and search
+            logger.info(f"🔍 Traditional RAG: Step 1 - Analyzing query with LLM: '{question[:100]}...'")
+            
+            # Use LLM to analyze the query and extract metadata
+            query_analysis = await self._analyze_query_with_llm(question)
+            
+            # Generate intelligent search queries based on analysis
+            search_queries = self._create_intelligent_search_queries(question, query_analysis)
+            
+            # Perform searches with intelligent queries
+            all_results = []
+            
+            for i, search_query in enumerate(search_queries[:3]):  # Limit to 3 queries to avoid too many API calls
+                logger.info(f"🔍 Traditional RAG: Executing search {i+1}: '{search_query}'")
+                
+                results = await self._search_knowledge_base(
+                    search_query, 
+                    top_k=8 if i == 0 else 5,  # More results for primary query
+                    token_tracker=token_tracker,
+                    tracking_id=tracking_id
+                )
+                
+                # Add results that aren't already included
+                for result in results:
+                    result_id = result.get('id', result.get('document_id', ''))
+                    if not any(r.get('id', r.get('document_id', '')) == result_id for r in all_results):
+                        all_results.append(result)
+                
+                logger.info(f"🔍 Traditional RAG: Search {i+1} found {len(results)} results")
+                
+                # If we have enough good results, we can stop early
+                if len(all_results) >= 10:
+                    break
+            
+            search_results = all_results[:15]  # Limit total results
+            logger.info(f"🔍 Traditional RAG: Intelligent search completed, found {len(search_results)} unique results")
             
             logger.info(f"🔍 Traditional RAG: Search completed, found {len(search_results)} results")
             
@@ -517,3 +545,305 @@ Please provide a comprehensive answer to the question using only the information
             "verification_level": verification_level.value if hasattr(verification_level, 'value') else str(verification_level),
             "credibility_method": "traditional_rag"
         }
+    
+    async def _analyze_query_with_llm(self, query: str) -> Dict[str, Any]:
+        """Use LLM to intelligently extract metadata from the user query"""
+        try:
+            analysis_prompt = f"""Analyze the following financial question and extract relevant metadata for search optimization:
+
+Question: "{query}"
+
+Please extract and return a JSON object with the following information:
+1. companies: List of company names, tickers, or variations mentioned (be comprehensive - include full names, short names, and ticker symbols)
+2. years: List of years mentioned (e.g., 2023, 2024, or fiscal years)
+3. financial_topics: Key financial concepts or topics mentioned or implied (e.g., revenue, earnings, profitability, debt, cash flow, risk factors, market share, growth, performance, etc.)
+4. document_types: Likely SEC document types needed (e.g., 10-K, 10-Q, 8-K, proxy statement, etc.)
+5. comparison_type: If this is a comparison question between multiple entities (true/false)
+6. search_keywords: Most important and relevant keywords for effective search
+7. query_intent: Brief description of what the user wants to know
+
+Be thorough in extraction - include all relevant companies, topics, and keywords that could help find relevant documents.
+
+Return only valid JSON, no other text or explanations."""
+
+            response = self.openai_client.chat.completions.create(
+                model="chat4omini",  # Use fast model for analysis
+                messages=[
+                    {"role": "system", "content": "You are a financial query analysis expert. Extract metadata from financial questions to optimize search. Return only valid JSON."},
+                    {"role": "user", "content": analysis_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            analysis_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            import json
+            try:
+                analysis = json.loads(analysis_text)
+                logger.info(f"🧠 Query analysis result: {analysis}")
+                return analysis
+            except json.JSONDecodeError:
+                # Fallback parsing if JSON is wrapped in markdown
+                if "```json" in analysis_text:
+                    json_start = analysis_text.find("```json") + 7
+                    json_end = analysis_text.find("```", json_start)
+                    json_text = analysis_text[json_start:json_end].strip()
+                    analysis = json.loads(json_text)
+                    logger.info(f"🧠 Query analysis result (extracted from markdown): {analysis}")
+                    return analysis
+                else:
+                    raise
+                    
+        except Exception as e:
+            logger.warning(f"🧠 LLM query analysis failed: {e}, falling back to basic analysis")
+            return self._fallback_query_analysis(query)
+
+    def _fallback_query_analysis(self, query: str) -> Dict[str, Any]:
+        """Fallback query analysis when LLM fails - uses pattern matching and keyword detection"""
+        query_lower = query.lower()
+        logger.info(f"🔄 Using fallback query analysis for: {query}")
+        
+        # Comprehensive company detection with more patterns
+        companies = []
+        company_patterns = {
+            'apple': ['Apple Inc.', 'Apple', 'AAPL'],
+            'microsoft': ['Microsoft Corporation', 'Microsoft', 'MSFT'],
+            'tesla': ['Tesla, Inc.', 'Tesla', 'TSLA'],
+            'amazon': ['Amazon.com, Inc.', 'Amazon', 'AMZN'],
+            'google': ['Alphabet Inc.', 'Google', 'GOOGL', 'Alphabet'],
+            'meta': ['Meta Platforms, Inc.', 'Meta', 'META', 'Facebook'],
+            'nvidia': ['NVIDIA Corporation', 'NVIDIA', 'NVDA'],
+            'netflix': ['Netflix, Inc.', 'Netflix', 'NFLX'],
+            'walmart': ['Walmart Inc.', 'Walmart', 'WMT'],
+            'jpmorgan': ['JPMorgan Chase & Co.', 'JPMorgan', 'JPM'],
+            'johnson': ['Johnson & Johnson', 'J&J', 'JNJ'],
+            'procter': ['Procter & Gamble', 'P&G', 'PG'],
+            'coca': ['The Coca-Cola Company', 'Coca-Cola', 'KO'],
+            'intel': ['Intel Corporation', 'Intel', 'INTC'],
+            'disney': ['The Walt Disney Company', 'Disney', 'DIS']
+        }
+        
+        # Check for company mentions
+        for key, variations in company_patterns.items():
+            if key in query_lower or any(var.lower() in query_lower for var in variations):
+                companies.extend(variations)
+        
+        # Enhanced year detection (including fiscal years and ranges)
+        import re
+        years = []
+        
+        # Standard year patterns
+        year_matches = re.findall(r'\b(20\d{2})\b', query)
+        years.extend([int(year) for year in year_matches])
+        
+        # Fiscal year patterns
+        fiscal_matches = re.findall(r'fiscal\s+(?:year\s+)?(20\d{2})', query_lower)
+        years.extend([int(year) for year in fiscal_matches])
+        
+        # Year ranges (e.g., "2022-2023")
+        range_matches = re.findall(r'(20\d{2})\s*[-–]\s*(20\d{2})', query)
+        for start_year, end_year in range_matches:
+            years.extend([int(start_year), int(end_year)])
+        
+        # Remove duplicates and sort
+        years = sorted(list(set(years)))
+        
+        # Comprehensive financial topics detection
+        financial_topics = []
+        topic_patterns = {
+            'revenue': ['revenue', 'sales', 'income', 'earnings'],
+            'profit': ['profit', 'profitability', 'net income', 'earnings'],
+            'cash flow': ['cash flow', 'cash', 'liquidity'],
+            'debt': ['debt', 'borrowing', 'liabilities', 'leverage'],
+            'risk': ['risk', 'risks', 'uncertainty', 'challenges'],
+            'growth': ['growth', 'expansion', 'increase'],
+            'performance': ['performance', 'results', 'metrics'],
+            'market share': ['market share', 'competition', 'competitive'],
+            'assets': ['assets', 'property', 'investments'],
+            'dividends': ['dividend', 'dividends', 'payout'],
+            'margins': ['margin', 'margins', 'profitability'],
+            'expenses': ['expenses', 'costs', 'spending'],
+            'guidance': ['guidance', 'forecast', 'outlook'],
+            'valuation': ['valuation', 'value', 'worth'],
+            'operations': ['operations', 'operational', 'business']
+        }
+        
+        for topic, keywords in topic_patterns.items():
+            if any(keyword in query_lower for keyword in keywords):
+                financial_topics.append(topic)
+        
+        # Document type detection
+        document_types = []
+        doc_patterns = {
+            '10-K': ['10-k', 'annual report', 'annual filing'],
+            '10-Q': ['10-q', 'quarterly report', 'quarterly filing'],
+            '8-K': ['8-k', 'current report', 'material event'],
+            'Proxy Statement': ['proxy', 'proxy statement', 'def 14a'],
+            'Earnings Call': ['earnings call', 'earnings transcript', 'conference call']
+        }
+        
+        for doc_type, keywords in doc_patterns.items():
+            if any(keyword in query_lower for keyword in keywords):
+                document_types.append(doc_type)
+        
+        # Default to common document types if none detected
+        if not document_types:
+            document_types = ["10-K", "10-Q"]
+        
+        # Enhanced comparison detection
+        comparison_words = [
+            'compare', 'contrast', 'versus', 'vs', 'difference', 'between',
+            'against', 'relative to', 'compared to', 'better than', 'worse than'
+        ]
+        is_comparison = any(word in query_lower for word in comparison_words)
+        
+        # Enhanced keyword extraction - remove stop words and get meaningful terms
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+            'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+            'should', 'may', 'might', 'can', 'what', 'when', 'where', 'why', 'how'
+        }
+        
+        # Split query into words and filter
+        words = re.findall(r'\b\w+\b', query_lower)
+        search_keywords = [word for word in words if len(word) > 2 and word not in stop_words]
+        
+        # Add extracted financial topics and company names to keywords
+        search_keywords.extend(financial_topics)
+        search_keywords.extend([comp.split()[0] for comp in companies[:3]])  # Add short company names
+        
+        # Remove duplicates while preserving order
+        unique_keywords = []
+        for keyword in search_keywords:
+            if keyword not in unique_keywords:
+                unique_keywords.append(keyword)
+        
+        # Determine query intent
+        query_intent = "Financial analysis query"
+        if is_comparison:
+            query_intent = "Comparative financial analysis"
+        elif financial_topics:
+            query_intent = f"Analysis of {', '.join(financial_topics[:2])}"
+        elif companies:
+            query_intent = f"Company analysis for {', '.join(companies[:2])}"
+        
+        result = {
+            "companies": companies,
+            "years": years,
+            "financial_topics": financial_topics,
+            "document_types": document_types,
+            "comparison_type": is_comparison,
+            "search_keywords": unique_keywords[:10],  # Limit to top 10 keywords
+            "query_intent": query_intent
+        }
+        
+        logger.info(f"🔄 Fallback analysis result: {result}")
+        return result
+
+    def _create_intelligent_search_queries(self, original_query: str, analysis: Dict[str, Any]) -> List[str]:
+        """Create multiple intelligent search queries based on LLM analysis"""
+        queries = []
+        
+        companies = analysis.get("companies", [])
+        years = analysis.get("years", [])
+        financial_topics = analysis.get("financial_topics", [])
+        search_keywords = analysis.get("search_keywords", [])
+        is_comparison = analysis.get("comparison_type", False)
+        document_types = analysis.get("document_types", [])
+        
+        logger.info(f"🔍 Creating search queries from analysis: {len(companies)} companies, {len(financial_topics)} topics, {len(years)} years")
+        
+        # Query 1: Comprehensive multi-dimensional search
+        if companies and financial_topics:
+            # Use top companies and topics for primary search
+            top_companies = companies[:4]  # Increased from 6 to include more variations
+            top_topics = financial_topics[:3]
+            
+            company_clause = " OR ".join(f'"{company}"' for company in top_companies)
+            topic_clause = " OR ".join(f'"{topic}"' for topic in top_topics)
+            
+            if years:
+                year_clause = " OR ".join(str(year) for year in years)
+                comprehensive_query = f"({company_clause}) AND ({topic_clause}) AND ({year_clause})"
+            else:
+                comprehensive_query = f"({company_clause}) AND ({topic_clause})"
+            
+            queries.append(comprehensive_query)
+        
+        # Query 2: Individual company deep searches (especially for comparisons)
+        if companies and (is_comparison or len(companies) > 1):
+            main_topics = financial_topics[:2] if financial_topics else search_keywords[:3]
+            
+            for company in companies[:3]:  # Focus on main companies
+                if main_topics:
+                    topic_part = " AND ".join(f'"{topic}"' for topic in main_topics)
+                    if years:
+                        company_deep_query = f'"{company}" AND ({topic_part}) AND ({" OR ".join(str(year) for year in years)})'
+                    else:
+                        company_deep_query = f'"{company}" AND ({topic_part})'
+                else:
+                    # Fallback to company + keywords
+                    if search_keywords:
+                        keyword_part = " AND ".join(f'"{kw}"' for kw in search_keywords[:3])
+                        company_deep_query = f'"{company}" AND ({keyword_part})'
+                    else:
+                        company_deep_query = f'"{company}"'
+                
+                queries.append(company_deep_query)
+        
+        # Query 3: Topic-focused search (without company restriction)
+        if financial_topics:
+            topic_focused = " AND ".join(f'"{topic}"' for topic in financial_topics[:3])
+            if years:
+                topic_focused += f" AND ({' OR '.join(str(year) for year in years)})"
+            queries.append(topic_focused)
+        
+        # Query 4: Document type specific search
+        if document_types and (companies or financial_topics):
+            doc_type_clause = " OR ".join(f'"{doc_type}"' for doc_type in document_types[:2])
+            
+            if companies and financial_topics:
+                # Combine doc type with companies and topics
+                company_clause = " OR ".join(f'"{company}"' for company in companies[:2])
+                topic_clause = " OR ".join(f'"{topic}"' for topic in financial_topics[:2])
+                doc_query = f"({doc_type_clause}) AND ({company_clause}) AND ({topic_clause})"
+            elif companies:
+                company_clause = " OR ".join(f'"{company}"' for company in companies[:3])
+                doc_query = f"({doc_type_clause}) AND ({company_clause})"
+            elif financial_topics:
+                topic_clause = " OR ".join(f'"{topic}"' for topic in financial_topics[:3])
+                doc_query = f"({doc_type_clause}) AND ({topic_clause})"
+            else:
+                doc_query = doc_type_clause
+            
+            queries.append(doc_query)
+        
+        # Query 5: Keyword-based broad search
+        if search_keywords:
+            # Use fewer keywords with OR to be less restrictive
+            if len(search_keywords) >= 4:
+                # Split the approach to avoid backslash in f-string
+                keywords_part1 = ' OR '.join(f'"{kw}"' for kw in search_keywords[:3])
+                keywords_part2 = ' OR '.join(f'"{kw}"' for kw in search_keywords[3:6])
+                keyword_query = f"({keywords_part1}) AND ({keywords_part2})"
+            else:
+                keyword_query = " AND ".join(f'"{keyword}"' for keyword in search_keywords[:4])
+            queries.append(keyword_query)
+        
+        # Query 6: Original query (always include as fallback)
+        queries.append(original_query)
+        
+        # Remove duplicates while preserving order and filter out very short queries
+        unique_queries = []
+        for query in queries:
+            if query not in unique_queries and len(query.strip()) > 5:
+                unique_queries.append(query)
+        
+        logger.info(f"🔍 Generated {len(unique_queries)} intelligent search queries")
+        for i, query in enumerate(unique_queries, 1):
+            logger.debug(f"   Query {i}: {query}")
+        
+        return unique_queries

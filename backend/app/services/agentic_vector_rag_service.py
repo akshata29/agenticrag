@@ -605,12 +605,76 @@ class AgenticVectorRAGService:
             if citation.get("section_title"):
                 document_types.add(citation["section_title"])
             
-            # Get content snippets
+            # Get full content snippets (no truncation for comprehensive answer)
             content = citation.get("content", "")
             if content and len(content) > 50:
-                content_snippets.append(content[:300] + "..." if len(content) > 300 else content)
+                content_snippets.append(content)  # Keep full content for comprehensive answer
         
-        # Generate a comprehensive answer
+        # Use Azure OpenAI to generate a comprehensive answer from the citation content
+        try:
+            from openai import AsyncAzureOpenAI
+            from app.core.config import settings
+            import asyncio
+            
+            # Prepare context from all citations
+            context = "\n\n".join([f"Source {i+1}: {snippet}" for i, snippet in enumerate(content_snippets)])
+            
+            system_prompt = f"""You are a financial analyst AI assistant. Based on the provided financial document excerpts, generate a comprehensive answer to the user's question.
+
+Question: {question}
+Companies mentioned: {', '.join(companies) if companies else 'Various'}
+Document types: {', '.join(document_types) if document_types else 'Financial documents'}
+
+Context from financial documents:
+{context}
+
+Instructions:
+1. Provide a detailed, comprehensive answer (500-1000 words when appropriate)
+2. Use specific information from the provided context
+3. Structure your response clearly with headings when relevant
+4. Include specific financial details and metrics mentioned in the documents
+5. Maintain a professional, analytical tone
+6. Cite specific information from the sources when relevant
+
+Generate a detailed financial analysis response:"""
+
+            async def generate_response():
+                client = AsyncAzureOpenAI(
+                    api_key=settings.AZURE_OPENAI_API_KEY,
+                    api_version=settings.AZURE_OPENAI_API_VERSION,
+                    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
+                )
+                
+                response = await client.chat.completions.create(
+                    model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": question}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.3,
+                )
+                
+                if response.choices and response.choices[0].message.content:
+                    return response.choices[0].message.content.strip()
+                return None
+            
+            # Run the async function
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're already in an async context, we need to use a different approach
+                # Fall back to template generation
+                pass
+            else:
+                comprehensive_answer = loop.run_until_complete(generate_response())
+                if comprehensive_answer:
+                    return comprehensive_answer
+        
+        except Exception as e:
+            logger.warning(f"Could not generate comprehensive answer with Azure OpenAI: {e}")
+            # Fall back to template generation
+        
+        # Fallback: Generate a comprehensive template answer
         answer_parts = []
         
         if "risk" in question.lower():
@@ -620,9 +684,9 @@ class AgenticVectorRAGService:
         else:
             answer_parts.append("Based on the available documents, here is the relevant information:")
         
-        # Add specific content from citations
-        for i, snippet in enumerate(content_snippets[:3], 1):  # Limit to 3 snippets
-            answer_parts.append(f"\n{i}. {snippet}")
+        # Add ALL content from citations (not just 3 snippets)
+        for i, snippet in enumerate(content_snippets, 1):
+            answer_parts.append(f"\n\n{i}. {snippet}")  # Include full content
         
         # Add document source information
         if document_types:
